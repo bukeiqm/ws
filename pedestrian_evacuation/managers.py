@@ -473,54 +473,26 @@ class PathPlanner:
         self.map_manager = map_manager
     
     def find_path(self, start_area_id: int, end_area_id: int) -> List[int]:
-        """使用A*算法查找路径（只考虑路口作为路径节点，但返回包含道路的完整路径）"""
+        """使用A*算法查找路径"""
         if start_area_id not in self.map_manager.areas or end_area_id not in self.map_manager.areas:
             return []
         
         if start_area_id == end_area_id:
             return [start_area_id]
         
-        start_area = self.map_manager.areas[start_area_id]
-        end_area = self.map_manager.areas[end_area_id]
-        
-        # 如果起点或终点不是路口，找到最近的路口
-        start_node_id = start_area_id
-        end_node_id = end_area_id
-        
-        if not start_area.is_node():
-            # 找到起点所在区域最近的路口
-            start_node_id = self._find_nearest_node(start_area_id)
-            if start_node_id is None:
-                return []
-        
-        if not end_area.is_node():
-            # 找到终点所在区域最近的路口
-            end_node_id = self._find_nearest_node(end_area_id)
-            if end_node_id is None:
-                return []
-        
-        # 如果起点和终点是同一个路口
-        if start_node_id == end_node_id:
-            # 如果起点不是路口，需要包含从起点到路口的路径
-            if not start_area.is_node():
-                path_to_node = self.map_manager.find_path_between_nodes(start_area_id, start_node_id)
-                if path_to_node:
-                    return path_to_node
-            return [start_node_id]
-        
-        # 使用A*算法只考虑路口作为路径节点
-        open_set_heap = [(0.0, start_node_id)]
-        open_set_dict = {start_node_id: True}
+        # A*算法
+        open_set_heap = [(0.0, start_area_id)]
+        open_set_dict = {start_area_id: True}
         came_from = {}
-        g_score = {start_node_id: 0.0}
+        g_score = {start_area_id: 0.0}
         f_score = {}
         
-        start_node = self.map_manager.areas[start_node_id]
-        end_node = self.map_manager.areas[end_node_id]
-        start_center = np.array(start_node.center)
-        end_center = np.array(end_node.center)
+        start_area = self.map_manager.areas[start_area_id]
+        end_area = self.map_manager.areas[end_area_id]
+        start_center = np.array(start_area.center)
+        end_center = np.array(end_area.center)
         h_start = float(np.linalg.norm(start_center - end_center))
-        f_score[start_node_id] = h_start
+        f_score[start_area_id] = h_start
         
         while open_set_heap:
             current_f, current_id = heapq.heappop(open_set_heap)
@@ -528,43 +500,28 @@ class PathPlanner:
                 continue
             del open_set_dict[current_id]
             
-            if current_id == end_node_id:
-                # 重构路口路径
-                node_path = [current_id]
+            if current_id == end_area_id:
+                # 重构路径
+                path = [current_id]
                 while current_id in came_from:
                     current_id = came_from[current_id]
-                    node_path.insert(0, current_id)
-                
-                # 将路口路径扩展为包含道路的完整路径
-                full_path = self._expand_node_path_to_full_path(node_path, start_area_id, end_area_id)
-                return full_path
+                    path.insert(0, current_id)
+                return path
             
             current_area = self.map_manager.areas[current_id]
             current_center = np.array(current_area.center)
             
-            # 只考虑相邻的路口
-            adjacent_nodes = self.map_manager.get_adjacent_nodes(current_id)
-            
-            for neighbor_node in adjacent_nodes:
-                neighbor_id = neighbor_node.id
+            for neighbor_id in current_area.adjacent:
+                if neighbor_id not in self.map_manager.areas:
+                    continue
+                
+                neighbor_area = self.map_manager.areas[neighbor_id]
                 
                 if not self.map_manager.is_area_passable(neighbor_id):
                     continue
                 
-                # 计算从当前路口到相邻路口的代价（包括中间道路）
-                path_between = self.map_manager.find_path_between_nodes(current_id, neighbor_id)
-                if not path_between:
-                    continue
-                
-                # 计算路径总长度作为代价
-                path_cost = 0.0
-                for i in range(len(path_between) - 1):
-                    area1 = self.map_manager.areas[path_between[i]]
-                    area2 = self.map_manager.areas[path_between[i + 1]]
-                    path_cost += np.linalg.norm(np.array(area2.center) - np.array(area1.center))
-                
-                neighbor_center = np.array(neighbor_node.center)
-                tentative_g_score = float(g_score[current_id] + path_cost)
+                neighbor_center = np.array(neighbor_area.center)
+                tentative_g_score = float(g_score[current_id] + np.linalg.norm(neighbor_center - current_center))
                 
                 if neighbor_id not in g_score or tentative_g_score < g_score[neighbor_id]:
                     came_from[neighbor_id] = current_id
@@ -576,117 +533,6 @@ class PathPlanner:
                         open_set_dict[neighbor_id] = True
         
         return []
-    
-    def _find_nearest_node(self, area_id: int) -> Optional[int]:
-        """找到距离指定区域最近的路口"""
-        if area_id not in self.map_manager.areas:
-            return None
-        
-        area = self.map_manager.areas[area_id]
-        area_center = np.array(area.center)
-        
-        # 如果当前区域就是路口，直接返回
-        if area.is_node():
-            return area_id
-        
-        # 使用BFS查找最近的路口
-        from collections import deque
-        queue = deque([(area_id, 0)])
-        visited = {area_id}
-        
-        while queue:
-            current_id, depth = queue.popleft()
-            current_area = self.map_manager.areas[current_id]
-            
-            # 如果找到路口，返回
-            if current_area.is_node():
-                return current_id
-            
-            # 检查相邻区域
-            for neighbor_id in current_area.adjacent:
-                if neighbor_id not in self.map_manager.areas:
-                    continue
-                
-                if not self.map_manager.is_area_passable(neighbor_id):
-                    continue
-                
-                if neighbor_id not in visited:
-                    visited.add(neighbor_id)
-                    queue.append((neighbor_id, depth + 1))
-        
-        return None
-    
-    def _expand_node_path_to_full_path(
-        self, 
-        node_path: List[int], 
-        start_area_id: int, 
-        end_area_id: int
-    ) -> List[int]:
-        """将路口路径扩展为包含道路的完整路径"""
-        if not node_path:
-            return []
-        
-        full_path = []
-        
-        # 如果起点不是路口，添加从起点到第一个路口的路径
-        start_area = self.map_manager.areas[start_area_id]
-        if not start_area.is_node() and node_path:
-            path_to_first_node = self.map_manager.find_path_between_nodes(start_area_id, node_path[0])
-            if path_to_first_node:
-                # 如果路径的第一个节点就是起点，直接使用；否则添加起点
-                if path_to_first_node[0] == start_area_id:
-                    full_path.extend(path_to_first_node)
-                else:
-                    full_path.append(start_area_id)
-                    full_path.extend(path_to_first_node)
-            else:
-                full_path.append(start_area_id)
-                if node_path:
-                    full_path.append(node_path[0])
-        else:
-            # 起点是路口，直接添加第一个路口
-            if node_path:
-                full_path.append(node_path[0])
-        
-        # 添加路口之间的完整路径（包括道路）
-        for i in range(len(node_path) - 1):
-            current_node = node_path[i]
-            next_node = node_path[i + 1]
-            
-            # 查找两个路口之间的完整路径
-            path_between = self.map_manager.find_path_between_nodes(current_node, next_node)
-            if path_between:
-                # 移除重复的当前节点
-                if full_path and full_path[-1] == path_between[0]:
-                    full_path.extend(path_between[1:])
-                else:
-                    full_path.extend(path_between)
-            else:
-                # 如果找不到路径，至少添加下一个路口
-                if not full_path or full_path[-1] != next_node:
-                    full_path.append(next_node)
-        
-        # 如果终点不是路口，添加从最后一个路口到终点的路径
-        end_area = self.map_manager.areas[end_area_id]
-        if not end_area.is_node() and node_path:
-            last_node = node_path[-1]
-            path_from_last_node = self.map_manager.find_path_between_nodes(last_node, end_area_id)
-            if path_from_last_node:
-                # 移除重复的最后一个路口节点
-                if full_path and full_path[-1] == path_from_last_node[0]:
-                    full_path.extend(path_from_last_node[1:])
-                else:
-                    full_path.extend(path_from_last_node)
-            else:
-                # 如果找不到路径，至少添加终点
-                if not full_path or full_path[-1] != end_area_id:
-                    full_path.append(end_area_id)
-        elif end_area.is_node() and node_path:
-            # 如果终点是路口，确保最后一个节点在路径中
-            if not full_path or full_path[-1] != end_area_id:
-                full_path.append(end_area_id)
-        
-        return full_path
     
     def choose_path(
         self,
@@ -701,10 +547,7 @@ class PathPlanner:
         fire_manager: Optional['FireManager'] = None,
         current_time: float = 0.0
     ) -> Optional[int]:
-        """路径选择：简单模式选择最近节点，智能模式考虑危险和从众行为，可选AI推荐
-        
-        如果当前在路口，只考虑相邻的路口作为选择，但会考虑到达该路口需要经过的道路。
-        """
+        """路径选择：简单模式选择最近节点，智能模式考虑危险和从众行为，可选AI推荐"""
         if not choices or self.map_manager is None:
             return None
         
@@ -713,31 +556,8 @@ class PathPlanner:
         if not valid_choices:
             return None
         
-        # 获取当前所在区域
-        current_area = self.map_manager.get_area_containing_point(agent.pos)
-        if current_area is None:
-            current_area_id = None
-        else:
-            current_area_id = current_area.id
-        
-        # 如果当前在路口，只考虑相邻的路口作为选择
-        if current_area is not None and current_area.is_node():
-            # 获取相邻的路口
-            adjacent_nodes = self.map_manager.get_adjacent_nodes(current_area_id)
-            node_choices = [node.id for node in adjacent_nodes if node.id in valid_choices]
-            
-            # 如果出口不是路口，也将其加入选择
-            if agent.exit_node_id in self.map_manager.areas:
-                exit_area = self.map_manager.areas[agent.exit_node_id]
-                if not exit_area.is_node() and agent.exit_node_id in valid_choices:
-                    node_choices.append(agent.exit_node_id)
-            
-            # 如果没有可选的路口，使用原始选择
-            if node_choices:
-                valid_choices = node_choices
-        
         # 恐慌值超过阈值时，直接从当前选项中随机选择
-        if np.tanh(agent.panic) > constants.STIMULUS_THRESHOLD:
+        if agent.panic > constants.STIMULUS_THRESHOLD:
             # 设置默认权重（用于监视器）
             from .monitor import PathSelectionWeights
             path_weights = PathSelectionWeights(
@@ -790,84 +610,36 @@ class PathPlanner:
         # 智能模式：计算每个选择的得分
         area_scores = {}
         
-        # 获取当前所在区域（用于计算到选择路口的路径）
-        current_area = self.map_manager.get_area_containing_point(agent.pos) if hasattr(agent, 'pos') else None
-        current_area_id = current_area.id if current_area else None
-        
-        for area_id in valid_choices:
+        for area_id in choices:
             if area_id not in self.map_manager.areas:
                 continue
             
             area = self.map_manager.areas[area_id]
             area_center = np.array(area.center)
             
-            # 考虑到达选择区域需要经过的路径（包括道路）
-            path_to_choice = []
-            if current_area is not None and current_area_id != area_id:
-                # 查找从当前区域到选择区域之间的路径（包括道路）
-                path_to_choice = self.map_manager.find_path_between_nodes(current_area_id, area_id)
-            
-            # 1. 距离得分（考虑路径长度，如果路径存在）
-            if path_to_choice:
-                # 计算路径总长度
-                path_length = 0.0
-                for i in range(len(path_to_choice) - 1):
-                    area1 = self.map_manager.areas[path_to_choice[i]]
-                    area2 = self.map_manager.areas[path_to_choice[i + 1]]
-                    path_length += np.linalg.norm(np.array(area2.center) - np.array(area1.center))
-                # 加上从选择路口到出口的距离
-                dist_to_exit = path_length + np.linalg.norm(area_center - exit_pos)
-            else:
-                dist_to_exit = np.linalg.norm(area_center - exit_pos)
+            # 1. 距离得分
+            dist_to_exit = np.linalg.norm(area_center - exit_pos)
             distance_score = 1.0 / (1.0 + dist_to_exit)
             
-            # 2. 危险程度得分（考虑路径上的危险）
+            # 2. 危险程度得分
             danger_score = 1.0
             if dangers:
                 total_danger = 0.0
-                # 考虑选择路口本身的危险
                 for danger in dangers:
                     danger_dist = np.linalg.norm(area_center - danger.pos)
                     danger_level = EnvironmentManager.calculate_danger_level(danger, area_center)
                     total_danger += danger_level / (1.0 + danger_dist)
-                
-                # 考虑路径上道路的危险（如果路径存在）
-                if path_to_choice:
-                    for path_area_id in path_to_choice:
-                        if path_area_id == area_id:
-                            continue  # 已经计算过
-                        path_area = self.map_manager.areas[path_area_id]
-                        path_area_center = np.array(path_area.center)
-                        for danger in dangers:
-                            danger_dist = np.linalg.norm(path_area_center - danger.pos)
-                            danger_level = EnvironmentManager.calculate_danger_level(danger, path_area_center)
-                            total_danger += danger_level / (1.0 + danger_dist) * 0.5  # 道路上的危险权重稍低
-                
                 danger_score = 1.0 / (1.0 + total_danger * constants.DANGER_WEIGHT)
             
-            # 3. 障碍物影响得分（考虑路径上的障碍物）
+            # 3. 障碍物影响得分
             obstacle_score = 1.0
             if obstacles:
                 total_obstacle = 0.0
                 threshold = 2.0
-                # 考虑选择路口本身的障碍物
                 for obstacle in obstacles:
                     obs_dist = np.linalg.norm(area_center - obstacle.pos)
                     if obs_dist < threshold:
                         total_obstacle += 1.0 / (1.0 + obs_dist)
-                
-                # 考虑路径上道路的障碍物（如果路径存在）
-                if path_to_choice:
-                    for path_area_id in path_to_choice:
-                        if path_area_id == area_id:
-                            continue  # 已经计算过
-                        path_area = self.map_manager.areas[path_area_id]
-                        path_area_center = np.array(path_area.center)
-                        for obstacle in obstacles:
-                            obs_dist = np.linalg.norm(path_area_center - obstacle.pos)
-                            if obs_dist < threshold:
-                                total_obstacle += 1.0 / (1.0 + obs_dist) * 0.5  # 道路上的障碍物权重稍低
-                
                 obstacle_score = 1.0 / (1.0 + total_obstacle * 0.5)
             
             # 4. 从众行为得分
@@ -1026,22 +798,11 @@ class PathPlanner:
                     agent.target_pos = np.array(exit_area.center)
         else:
             # 目标指向路径中的下一个区域
-            # 如果当前在路口，可以进行路径选择（只考虑相邻的路口）
             if agent.use_smart_choice and current_area.is_node():
-                # 获取相邻的路口（只考虑路口作为选择）
-                adjacent_nodes = self.map_manager.get_adjacent_nodes(current_area_id)
-                if len(adjacent_nodes) > 0:
-                    # 构建选择列表：包括相邻路口和在路径中的区域，以及出口
-                    choices = []
-                    for node in adjacent_nodes:
-                        if node.id in agent.path or node.id == agent.exit_node_id:
-                            choices.append(node.id)
-                    # 如果出口不是路口，也加入选择
-                    if agent.exit_node_id in self.map_manager.areas:
-                        exit_area = self.map_manager.areas[agent.exit_node_id]
-                        if not exit_area.is_node() and agent.exit_node_id in agent.path:
-                            choices.append(agent.exit_node_id)
-                    
+                adjacent_areas = self.map_manager.get_adjacent_areas(current_area_id)
+                if len(adjacent_areas) > 0:
+                    choices = [area.id for area in adjacent_areas 
+                              if area.id in agent.path or area.id == agent.exit_node_id]
                     if len(choices) > 0:
                         if agent.exit_pos is not None:
                             exit_pos = agent.exit_pos
@@ -1090,7 +851,7 @@ class AgentManager:
         neighbor_count = sum(1 for n in neighbors 
                            if np.dot(agent.pos - n.pos, agent.pos - n.pos) < perceive_radius_sq)
         danger = EnvironmentManager.get_max_danger_level(dangers, agent.pos)
-        agent.panic = neighbor_count / np.pi + danger
+        agent.panic = np.tanh(neighbor_count / np.pi + danger)
         
         # 生成新的正态分布概率因子
         agent.panic_probability_factor = np.random.normal(

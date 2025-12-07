@@ -39,6 +39,7 @@ class AgentMonitor:
         # 时间序列数据
         self.time_history: List[float] = []
         self.panic_history: List[float] = []
+        self.speed_history: List[float] = []  # 速度历史
         
         # 加速度记录
         self.acceleration_history: List[AccelerationRecord] = []
@@ -60,6 +61,7 @@ class AgentMonitor:
         """记录当前状态"""
         self.time_history.append(current_time)
         self.panic_history.append(self.agent.panic)
+        self.speed_history.append(float(np.linalg.norm(self.agent.vel)))  # 记录速度大小
         self.acceleration_history.append(acceleration)
         self.path_weights_history.append(path_weights)
         
@@ -118,5 +120,6 @@ class AgentMonitor:
         """清除历史记录"""
         self.time_history.clear()
         self.panic_history.clear()
+        self.speed_history.clear()
         self.acceleration_history.clear()
         self.path_weights_history.clear()

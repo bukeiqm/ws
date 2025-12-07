@@ -41,13 +41,13 @@ INTERPERSONAL_FORCE_PARAMS = {
 
 # ================================环境参数=============================== #
 ENVIRONMENTAL_FORCE_PARAMS = {
-    "danger": {"A": 8.0, "B": 2.0},  # Params uses when calc forces from dangers
-    "obstacle": {"A": 5.0, "B": 1.0}
+    "danger": {"A": 5.0, "B": 0.8},  # Params uses when calc forces from dangers
+    "obstacle": {"A": 5.0, "B": 2.0}
 }
 
 DANGER_EFFECT_PARAMS = {
     "default": {"lambda": 5.0, "stimuli": 1.0},  # Params for danger
-    "fire": {"lambda": 10.0, "stimuli": 5.0}  # Params for fire (will be overridden by FIRE_DANGER_*)
+    "fire": {"lambda": 0.5, "stimuli": 50.0}  # Params for fire (will be overridden by FIRE_DANGER_*)
 }
 
 # ================================路径选择参数=============================== #
