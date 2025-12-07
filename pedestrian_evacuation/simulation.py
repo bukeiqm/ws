@@ -8,7 +8,7 @@ from matplotlib.patches import Rectangle
 from . import constants
 from .models import Map
 from .entities import AgentData, ObstacleData, DangerData, AreaData, FireData
-from .managers import AgentManager, FireManager, MPCPlanner
+from .managers import AgentManager, FireManager, MPCPlanner, PathPlanner
 from .monitor import AgentMonitor
 
 # 设置字体
@@ -41,7 +41,7 @@ def get_random_position_in_passable_area(map_manager, passable_areas, margin=0.3
     return pos
 
 
-def plot_agent_parameters(agent, figsize=(16, 12)):
+def plot_agent_parameters(agent, figsize=(8, 6)):
     """绘制某个行人的各个参数随时间的变化
     
     Args:
@@ -210,51 +210,76 @@ def run_simulation(use_smart_choice=None, num_agents=None, num_obstacles=None, n
     
     # ========== 根据购物中心平面图创建地图 ==========
     # 地图尺寸：根据图片布局设计
-    map_width = 24.0  # 地图宽度（米）
-    map_height = 18.0  # 地图高度（米）
+    map_width = 28.0  # 地图宽度（米）
+    map_height = 20.0  # 地图高度（米）
     cell_size = 2.0  # 每个区块的大小（米）
     
-    # 创建网格系统（12x9 网格）
-    grid_cols = 12
-    grid_rows = 9
+    # 创建网格系统（14x10 网格）
+    grid_cols = 14
+    grid_rows = 10
     
-    # 定义购物中心布局（1=可通行，0=不可通行/货架）
-    # 根据图片中的布局设计
+    # 定义购物中心布局
+    # 0 = 不可通行/货架
+    # 1 = 可通行区域
+    # 3 = 出口（可通行，仅在地图边缘）
+    # 根据福利隆购物中心平面图设计
+    # 布局说明：
+    # - 顶部：肉区、火锅食材区、面点区、楼梯、冷藏饮料
+    # - 左侧：水产区米油区、楼梯、调料货架
+    # - 中央：鲜蛋区、南北干调、杂粮区、冷冻区、生鲜区、散称区、熟食凉菜岛柜
+    # - 底部：调料货架、方便面货架、酒货架、货架、客服区
+    # - 右侧：饮料区、纸品区
     layout = [
-        # 行0（顶部）
-        [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1],  # 顶部通道（包含顶部出口）
-        # 行1
-        [1, 0, 0, 1, 0, 0, 1, 1, 1, 0, 0, 1],  # 肉区、火锅食材区、面点区等
-        # 行2
-        [1, 0, 0, 1, 0, 0, 1, 1, 1, 0, 0, 1],  # 货架区域
-        # 行3
-        [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1],  # 生鲜区通道
-        # 行4
-        [1, 0, 0, 1, 1, 1, 1, 0, 0, 1, 1, 1],  # 生鲜区、食品区
-        # 行5
-        [1, 0, 0, 1, 1, 1, 1, 0, 0, 1, 1, 1],  # 货架区域
-        # 行6
-        [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1],  # 中部通道（包含底部出口）
-        # 行7
-        [1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1],  # 底部货架区域
-        # 行8（底部）
-        [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1],  # 底部通道
+        # 行0（顶部）- 顶部通道，包含顶部出口（在火锅食材区和面点区之间）
+        [0, 0, 0, 0, 0, 3, 0, 0, 0, 0, 0, 0, 0, 0],  # 顶部通道（肉区、火锅食材区、面点区、楼梯、冷藏饮料）
+        # 行1 - 货架区域
+        [0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0],  # 肉区、火锅食材区、面点区、楼梯、冷藏饮料
+        # 行2 - 货架区域
+        [0, 1, 0, 1, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0],  # 货架区域
+        # 行3 - 中央通道（生鲜区通道）
+        [0, 1, 0, 1, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0],  # 生鲜区通道（鲜蛋区、南北干调、杂粮区、冷冻区、生鲜区、散称区）
+        # 行4 - 中央区域
+        [0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 3],  # 生鲜区、食品区、散称区、熟食凉菜岛柜
+        # 行5 - 中央区域
+        [0, 1, 0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 1, 0],  # 货架区域
+        # 行6 - 中部通道（包含底部出口，在方便面货架和酒货架之间）
+        [0, 1, 0, 1, 1, 1, 1, 1, 1, 1, 1, 0, 1, 0],  # 中部通道（调料货架、方便面货架、酒货架、货架、客服区）
+        # 行7 - 底部货架区域
+        [0, 1, 0, 1, 0, 0, 1, 0, 0, 0, 0, 0, 1, 0],  # 底部货架区域（调料货架、方便面货架、酒货架、货架）
+        # 行8 - 底部通道扩展
+        [0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0],  # 底部通道扩展区域
+        # 行9（底部）- 底部通道
+        [0, 0, 3, 0, 0, 0, 3, 0, 0, 0, 0, 0, 0, 0],  # 底部通道
     ]
     
+    layout = layout[::-1]
+
     # 创建区块
     passable_areas = []
     area_grid = {}  # 存储每个网格位置对应的区域ID
+    exit_areas = []  # 存储出口区域信息 [(area_id, exit_pos), ...]
     
     for j in range(grid_rows):
         for i in range(grid_cols):
             lb = [i * cell_size, j * cell_size]
             rt = [(i + 1) * cell_size, (j + 1) * cell_size]
             
-            if layout[j][i] == 1:
-                # 可通行区块
+            if layout[j][i] == 1 or layout[j][i] == 3:
+                # 可通行区块（包括出口）
                 area_id = map_manager.add_node(lb, rt)
                 passable_areas.append(area_id)
                 area_grid[(i, j)] = area_id
+                
+                # 如果是出口（标记为3），检查是否在地图边缘
+                if layout[j][i] == 3:
+                    is_edge = (i == 0 or i == grid_cols - 1 or j == 0 or j == grid_rows - 1)
+                    if is_edge:
+                        # 计算出口位置（区域中心）
+                        exit_pos = np.array([(lb[0] + rt[0]) / 2, (lb[1] + rt[1]) / 2])
+                        exit_areas.append((area_id, exit_pos))
+                    else:
+                        # 如果出口不在边缘，发出警告并当作普通可通行区域处理
+                        print(f"警告：位置 ({i}, {j}) 标记为出口但不在地图边缘，将作为普通可通行区域处理")
             else:
                 # 不可通行区块（货架）
                 map_manager.add_forbidden_area(lb, rt)
@@ -274,25 +299,8 @@ def run_simulation(use_smart_choice=None, num_agents=None, num_obstacles=None, n
                 neighbor_id = area_grid[(ni, nj)]
                 map_manager.connect_areas(area_id, neighbor_id)
     
-    # 设置3个出口位置（根据图片）
-    exits = []
-    # 出口1：顶部中间（行0，列5-6之间）
-    exit1_pos = np.array([5.5 * cell_size, 0.5 * cell_size])
-    exit1_area = map_manager.get_area_containing_point(exit1_pos)
-    if exit1_area and exit1_area.id in passable_areas:
-        exits.append((exit1_area.id, exit1_pos))
-    
-    # 出口2：底部中间（行6，列5-6之间）
-    exit2_pos = np.array([5.5 * cell_size, 6.5 * cell_size])
-    exit2_area = map_manager.get_area_containing_point(exit2_pos)
-    if exit2_area and exit2_area.id in passable_areas:
-        exits.append((exit2_area.id, exit2_pos))
-    
-    # 出口3：右侧（行3-4，列11）
-    exit3_pos = np.array([11.5 * cell_size, 3.5 * cell_size])
-    exit3_area = map_manager.get_area_containing_point(exit3_pos)
-    if exit3_area and exit3_area.id in passable_areas:
-        exits.append((exit3_area.id, exit3_pos))
+    # 从layout数组中读取出口位置
+    exits = exit_areas.copy()
     
     # 如果没有找到出口，使用默认位置
     if len(exits) == 0:
@@ -352,6 +360,22 @@ def run_simulation(use_smart_choice=None, num_agents=None, num_obstacles=None, n
                     fire_area_id = np.random.choice(available_areas)
                     fire_manager.add_fire(fire_area_id, current_time=0.0)
     
+    # Set obstacles（在可通行区域内随机生成）
+    obstacles = []
+    for _ in range(num_obstacles):
+        pos = get_random_position_in_passable_area(map_manager, passable_areas, margin=0.3)
+        if pos is not None:
+            obs = ObstacleData(pos)
+            obstacles.append(obs)
+
+    # Set dangers（在可通行区域内随机生成）
+    dangers = []
+    for _ in range(num_danger):
+        pos = get_random_position_in_passable_area(map_manager, passable_areas, margin=0.3)
+        if pos is not None:
+            dan = DangerData(pos)
+            dangers.append(dan)
+    
     # Set agents（在可通行区域内随机分布）
     agents = []
     # 定义行人类型列表
@@ -374,34 +398,46 @@ def run_simulation(use_smart_choice=None, num_agents=None, num_obstacles=None, n
         # 随机选择行人类型（成年人、老人、儿童）
         agent_type = np.random.choice(agent_types)
         agent = AgentData(pos, agent_type=agent_type)
-        # 随机选择一个出口作为目标
-        exit_idx = np.random.randint(0, len(exits))
-        agent.exit_node_id, agent.exit_pos = exits[exit_idx]
-        agent.exit_pos = np.array(agent.exit_pos, dtype=float)
         agent.use_smart_choice = use_smart_choice  # 设置路径选择方法
         agents.append(agent)
+    
+    # 使用智能方法为每个行人选择最优出口
+    path_planner = PathPlanner(map_manager)
+    for agent in agents:
+        # 获取当前位置的邻居（已创建的其他行人）
+        current_area = map_manager.get_area_containing_point(agent.pos)
+        neighbors = []
+        if current_area:
+            neighbors = [a for a in agents if a is not agent and 
+                        current_area.inside(a.pos)]
+        
+        # 获取火灾危险源（如果启用）
+        fire_dangers = []
+        if fire_manager is not None:
+            fire_dangers = fire_manager.get_fire_dangers()
+        all_dangers = dangers + fire_dangers
+        
+        # 使用智能方法选择出口
+        chosen_exit = path_planner.choose_exit(
+            agent, exits, neighbors, all_dangers, obstacles,
+            all_agents=agents, mpc_planner=mpc_planner, 
+            fire_manager=fire_manager, current_time=0.0
+        )
+        
+        if chosen_exit is not None:
+            agent.exit_node_id, agent.exit_pos = chosen_exit
+            agent.exit_pos = np.array(agent.exit_pos, dtype=float)
+        else:
+            # 如果选择失败，随机选择一个出口作为后备
+            exit_idx = np.random.randint(0, len(exits))
+            agent.exit_node_id, agent.exit_pos = exits[exit_idx]
+            agent.exit_pos = np.array(agent.exit_pos, dtype=float)
 
     # 创建监视器（如果指定了要监视的行人）
     monitor = None
     if monitor_agent_index is not None and 0 <= monitor_agent_index < len(agents):
         monitor = AgentMonitor(agents[monitor_agent_index])
         print(f"监视器已创建，监视行人 #{monitor_agent_index}")
-
-    # Set obstacles（在可通行区域内随机生成）
-    obstacles = []
-    for _ in range(num_obstacles):
-        pos = get_random_position_in_passable_area(map_manager, passable_areas, margin=0.3)
-        if pos is not None:
-            obs = ObstacleData(pos)
-            obstacles.append(obs)
-
-    # Set dangers（在可通行区域内随机生成）
-    dangers = []
-    for _ in range(num_danger):
-        pos = get_random_position_in_passable_area(map_manager, passable_areas, margin=0.3)
-        if pos is not None:
-            dan = DangerData(pos)
-            dangers.append(dan)
 
     # set bounds（使用地图中的不可通行区域作为边界）
     bounds = []
@@ -465,9 +501,9 @@ def run_simulation(use_smart_choice=None, num_agents=None, num_obstacles=None, n
             ax.add_patch(rect)
             area_rects[area_id] = rect  # 存储引用以便后续更新
         else:
-            # 不可通行区块：红色
+            # 不可通行区块：黑色（货架区域）
             rect = Rectangle(lb, width, height, 
-                           facecolor='red', edgecolor='darkred', 
+                           facecolor='black', edgecolor='black', 
                            linewidth=2, alpha=0.5)
             ax.add_patch(rect)
     
@@ -509,7 +545,7 @@ def run_simulation(use_smart_choice=None, num_agents=None, num_obstacles=None, n
     monitor_lines = {}  # 存储各个图表的线条对象
     if monitor is not None:
         # 创建包含多个子图的布局
-        monitor_fig, monitor_axes = plt.subplots(2, 2, figsize=(16, 12))
+        monitor_fig, monitor_axes = plt.subplots(2, 2, figsize=(8, 6))
         monitor_fig.suptitle(f'行人 #{monitor_agent_index} 实时监视器 - 数据随时间变化', 
                             fontsize=16, fontweight='bold')
         
@@ -519,7 +555,9 @@ def run_simulation(use_smart_choice=None, num_agents=None, num_obstacles=None, n
         ax1.set_xlabel('时间 (s)', fontsize=10)
         ax1.set_ylabel('恐慌值', fontsize=10)
         ax1.grid(True, alpha=0.3)
-        ax1.set_ylim([0, 1.1])
+        # 不设置固定上限，让图表自动缩放以适应数据范围
+        # 设置最小值为0，最大值由数据决定
+        ax1.set_ylim(bottom=0)  # 只设置最小值，让最大值自动调整
         line_panic, = ax1.plot([], [], 'r-', linewidth=2, label='恐慌值')
         ax1.legend()
         monitor_lines['panic'] = line_panic
@@ -533,14 +571,11 @@ def run_simulation(use_smart_choice=None, num_agents=None, num_obstacles=None, n
         lines_acc = {
             'goal': ax2.plot([], [], 'g-', linewidth=1.5, label='目标驱动', alpha=0.8)[0],
             'interpersonal': ax2.plot([], [], 'b-', linewidth=1.5, label='行人间作用', alpha=0.8)[0],
-            'obstacle': ax2.plot([], [], 'orange', linewidth=1.5, label='障碍物', alpha=0.8)[0],
-            'danger': ax2.plot([], [], 'purple', linewidth=1.5, label='普通危险源', alpha=0.8)[0],
-            'fire': ax2.plot([], [], 'red', linewidth=1.5, label='火灾', alpha=0.8)[0],
-            'boundary': ax2.plot([], [], 'brown', linewidth=1.5, label='边界', alpha=0.8)[0],
+            'environmental': ax2.plot([], [], 'orange', linewidth=1.5, label='环境加速度', alpha=0.8)[0],
             'psychological': ax2.plot([], [], 'pink', linewidth=1.5, label='心理因素', alpha=0.8)[0],
             'total': ax2.plot([], [], 'k-', linewidth=2, label='总加速度', alpha=1.0)[0]
         }
-        ax2.legend(loc='upper right', fontsize=8, ncol=2)
+        ax2.legend(loc='upper right', fontsize=9)
         monitor_lines['acceleration'] = lines_acc
         
         # 子图3：路径选择权重随时间变化
@@ -726,17 +761,20 @@ def run_simulation(use_smart_choice=None, num_agents=None, num_obstacles=None, n
                 monitor_lines['panic'].set_data(time_data, monitor.panic_history)
                 monitor_axes[0, 0].relim()
                 monitor_axes[0, 0].autoscale_view()
+                # 确保y轴最小值从0开始，最大值根据数据自动调整
+                y_min, y_max = monitor_axes[0, 0].get_ylim()
+                monitor_axes[0, 0].set_ylim(bottom=0, top=max(y_max, max(monitor.panic_history) * 1.1))
             
             # 更新加速度图表
             if len(monitor.acceleration_history) > 0:
                 acc_lines = monitor_lines['acceleration']
+                # 计算环境加速度（障碍物 + 危险源 + 火灾 + 边界）
                 acc_data = {
                     'goal': [float(np.linalg.norm(acc.acc_goal)) for acc in monitor.acceleration_history],
                     'interpersonal': [float(np.linalg.norm(acc.acc_int)) for acc in monitor.acceleration_history],
-                    'obstacle': [float(np.linalg.norm(acc.acc_obstacle)) for acc in monitor.acceleration_history],
-                    'danger': [float(np.linalg.norm(acc.acc_danger)) for acc in monitor.acceleration_history],
-                    'fire': [float(np.linalg.norm(acc.acc_fire)) for acc in monitor.acceleration_history],
-                    'boundary': [float(np.linalg.norm(acc.acc_bound)) for acc in monitor.acceleration_history],
+                    'environmental': [float(np.linalg.norm(acc.acc_obstacle + acc.acc_danger + 
+                                                          acc.acc_fire + acc.acc_bound)) 
+                                     for acc in monitor.acceleration_history],
                     'psychological': [float(np.linalg.norm(acc.acc_psy)) for acc in monitor.acceleration_history],
                     'total': [float(np.linalg.norm(acc.acc_total)) for acc in monitor.acceleration_history]
                 }

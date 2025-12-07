@@ -534,6 +534,207 @@ class PathPlanner:
         
         return []
     
+    def choose_exit(
+        self,
+        agent: AgentData,
+        exits: List[tuple],  # List of (exit_node_id, exit_pos)
+        neighbors: List[AgentData],
+        dangers: List[DangerData],
+        obstacles: List[ObstacleData],
+        all_agents: Optional[List[AgentData]] = None,
+        mpc_planner: Optional['MPCPlanner'] = None,
+        fire_manager: Optional['FireManager'] = None,
+        current_time: float = 0.0
+    ) -> Optional[tuple]:
+        """选择最优出口：考虑距离、拥挤度、安全性和路径长度
+        
+        Args:
+            agent: 当前行人
+            exits: 可用出口列表，每个元素为 (exit_node_id, exit_pos)
+            neighbors: 邻居行人列表
+            dangers: 危险源列表
+            obstacles: 障碍物列表
+            all_agents: 所有行人列表（用于计算拥挤度）
+            mpc_planner: MPC规划器（可选）
+            fire_manager: 火灾管理器（可选）
+            current_time: 当前时间
+            
+        Returns:
+            最优出口 (exit_node_id, exit_pos)，如果没有可用出口则返回None
+        """
+        if not exits or self.map_manager is None:
+            return None
+        
+        # 获取当前位置所在区域
+        current_area = self.map_manager.get_area_containing_point(agent.pos)
+        if current_area is None:
+            # 如果无法确定当前位置，随机选择一个出口
+            return exits[np.random.randint(0, len(exits))] if exits else None
+        
+        current_area_id = current_area.id
+        
+        # 获取该行人的心理阈值
+        threshold = constants.STIMULUS_THRESHOLD.get(
+            agent.agent_type, 
+            constants.STIMULUS_THRESHOLD_DEFAULT
+        )
+        # 恐慌值超过阈值时，随机选择出口
+        if agent.panic > threshold:
+            return exits[np.random.randint(0, len(exits))] if exits else None
+        
+        # 简单模式：选择距离最近的出口
+        if not agent.use_smart_choice:
+            min_dist = float('inf')
+            chosen_exit = None
+            for exit_node_id, exit_pos in exits:
+                if exit_node_id not in self.map_manager.areas:
+                    continue
+                dist = float(np.linalg.norm(agent.pos - exit_pos))
+                if dist < min_dist:
+                    min_dist = dist
+                    chosen_exit = (exit_node_id, exit_pos)
+            return chosen_exit if chosen_exit else (exits[0] if exits else None)
+        
+        # 智能模式：计算每个出口的得分
+        exit_scores = {}
+        all_agents = all_agents or []
+        
+        for exit_node_id, exit_pos in exits:
+            if exit_node_id not in self.map_manager.areas:
+                continue
+            
+            # 1. 距离得分（考虑路径长度，而不仅仅是直线距离）
+            path = self.find_path(current_area_id, exit_node_id)
+            if not path:
+                # 如果无法到达该出口，跳过
+                continue
+            
+            # 计算路径总长度
+            path_length = 0.0
+            for i in range(len(path) - 1):
+                area1 = self.map_manager.areas[path[i]]
+                area2 = self.map_manager.areas[path[i + 1]]
+                path_length += np.linalg.norm(np.array(area2.center) - np.array(area1.center))
+            
+            # 加上到出口位置的距离
+            if exit_node_id in self.map_manager.areas:
+                exit_area = self.map_manager.areas[exit_node_id]
+                path_length += np.linalg.norm(exit_pos - np.array(exit_area.center))
+            
+            distance_score = 1.0 / (1.0 + path_length)
+            
+            # 2. 拥挤度得分（出口附近的行人数量）
+            crowd_score = 1.0
+            if all_agents:
+                crowd_radius = 3.0  # 考虑出口周围3米内的行人
+                nearby_agents = 0
+                for other_agent in all_agents:
+                    if other_agent is agent or other_agent.evacuated:
+                        continue
+                    dist_to_exit = np.linalg.norm(other_agent.pos - exit_pos)
+                    if dist_to_exit < crowd_radius:
+                        nearby_agents += 1
+                
+                # 拥挤度越高，得分越低
+                crowd_score = 1.0 / (1.0 + nearby_agents * 0.3)
+            
+            # 3. 危险程度得分
+            danger_score = 1.0
+            if dangers:
+                total_danger = 0.0
+                for danger in dangers:
+                    danger_dist = np.linalg.norm(exit_pos - danger.pos)
+                    danger_level = EnvironmentManager.calculate_danger_level(danger, exit_pos)
+                    total_danger += danger_level / (1.0 + danger_dist)
+                danger_score = 1.0 / (1.0 + total_danger * constants.DANGER_WEIGHT)
+            
+            # 4. 障碍物影响得分
+            obstacle_score = 1.0
+            if obstacles:
+                total_obstacle = 0.0
+                threshold = 2.0
+                for obstacle in obstacles:
+                    obs_dist = np.linalg.norm(exit_pos - obstacle.pos)
+                    if obs_dist < threshold:
+                        total_obstacle += 1.0 / (1.0 + obs_dist)
+                obstacle_score = 1.0 / (1.0 + total_obstacle * 0.5)
+            
+            # 5. 从众行为得分（有多少邻居选择了这个出口）
+            herd_score = 1.0
+            if neighbors and constants.HERD_BEHAVIOR_FACTOR > 0:
+                neighbor_exits = 0
+                total_neighbors = 0
+                for neighbor in neighbors:
+                    if neighbor.exit_node_id != -1:
+                        total_neighbors += 1
+                        if neighbor.exit_node_id == exit_node_id:
+                            neighbor_exits += 1
+                
+                if total_neighbors > 0:
+                    exit_ratio = neighbor_exits / total_neighbors
+                    herd_score = 1.0 + constants.HERD_BEHAVIOR_FACTOR * exit_ratio
+            
+            # 6. AI推荐得分（如果启用MPC，可以推荐出口）
+            ai_score = 1.0
+            if (constants.MPC_ENABLED and mpc_planner is not None and 
+                all_agents is not None):
+                # 使用MPC推荐路径到该出口
+                # 这里简化处理，如果MPC推荐了到该出口的路径，给予更高得分
+                # 实际实现中，可以调用MPC来评估每个出口
+                pass  # 暂时不实现，因为MPC主要针对路径选择
+            
+            # 综合得分（权重受panic影响）
+            activated_panic = np.tanh(agent.panic)
+            panic_weight_factor = activated_panic * agent.panic_probability_factor
+            
+            base_weights = {
+                'distance': 0.3,
+                'crowd': 0.25,  # 拥挤度权重
+                'danger': 0.25,
+                'obstacle': 0.1,
+                'herd': 0.1
+            }
+            
+            distance_weight = base_weights['distance'] * (1.0 - panic_weight_factor * 0.3)
+            crowd_weight = base_weights['crowd'] * (1.0 - panic_weight_factor * 0.2)
+            danger_weight = base_weights['danger'] * (1.0 + panic_weight_factor * 0.5)
+            obstacle_weight = base_weights['obstacle'] * (1.0 + panic_weight_factor * 0.4)
+            herd_weight = base_weights['herd'] * (1.0 - panic_weight_factor * 0.2)
+            
+            # 归一化权重
+            total_weight = (distance_weight + crowd_weight + danger_weight + 
+                          obstacle_weight + herd_weight)
+            if total_weight > 1e-6:
+                distance_weight /= total_weight
+                crowd_weight /= total_weight
+                danger_weight /= total_weight
+                obstacle_weight /= total_weight
+                herd_weight /= total_weight
+            
+            total_score = (distance_score * distance_weight + 
+                          crowd_score * crowd_weight +
+                          danger_score * danger_weight + 
+                          obstacle_score * obstacle_weight + 
+                          herd_score * herd_weight)
+            exit_scores[(exit_node_id, tuple(exit_pos))] = total_score
+        
+        if len(exit_scores) == 0:
+            # 如果没有可用出口，返回第一个
+            return exits[0] if exits else None
+        
+        # 使用概率选择（softmax）
+        exit_tuples = list(exit_scores.keys())
+        score_values = np.array([exit_scores[et] for et in exit_tuples])
+        exp_scores = np.exp(score_values * 5.0)
+        probabilities = exp_scores / np.sum(exp_scores)
+        chosen_idx = np.random.choice(len(exit_tuples), p=probabilities)
+        chosen_exit_tuple = exit_tuples[chosen_idx]
+        
+        # 转换回原始格式
+        exit_node_id = chosen_exit_tuple[0]
+        exit_pos = np.array(chosen_exit_tuple[1])
+        return (exit_node_id, exit_pos)
+    
     def choose_path(
         self,
         agent: AgentData,
@@ -556,8 +757,13 @@ class PathPlanner:
         if not valid_choices:
             return None
         
+        # 获取该行人的心理阈值
+        threshold = constants.STIMULUS_THRESHOLD.get(
+            agent.agent_type, 
+            constants.STIMULUS_THRESHOLD_DEFAULT
+        )
         # 恐慌值超过阈值时，直接从当前选项中随机选择
-        if agent.panic > constants.STIMULUS_THRESHOLD:
+        if agent.panic > threshold:
             # 设置默认权重（用于监视器）
             from .monitor import PathSelectionWeights
             path_weights = PathSelectionWeights(
@@ -851,7 +1057,7 @@ class AgentManager:
         neighbor_count = sum(1 for n in neighbors 
                            if np.dot(agent.pos - n.pos, agent.pos - n.pos) < perceive_radius_sq)
         danger = EnvironmentManager.get_max_danger_level(dangers, agent.pos)
-        agent.panic = np.tanh(neighbor_count / np.pi + danger)
+        agent.panic = 0.1 * neighbor_count / np.pi + danger
         
         # 生成新的正态分布概率因子
         agent.panic_probability_factor = np.random.normal(

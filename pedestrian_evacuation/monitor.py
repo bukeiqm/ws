@@ -76,22 +76,20 @@ class AgentMonitor:
             return {
                 'goal': 0.0,
                 'interpersonal': 0.0,
-                'obstacle': 0.0,
-                'danger': 0.0,
-                'fire': 0.0,
-                'boundary': 0.0,
+                'environmental': 0.0,  # 合并后的环境加速度
                 'psychological': 0.0,
                 'total': 0.0
             }
         
         acc = self.current_acceleration
+        # 计算环境加速度（障碍物 + 危险源 + 火灾 + 边界）
+        acc_environmental = (acc.acc_obstacle + acc.acc_danger + 
+                            acc.acc_fire + acc.acc_bound)
+        
         return {
             'goal': float(np.linalg.norm(acc.acc_goal)),
             'interpersonal': float(np.linalg.norm(acc.acc_int)),
-            'obstacle': float(np.linalg.norm(acc.acc_obstacle)),
-            'danger': float(np.linalg.norm(acc.acc_danger)),
-            'fire': float(np.linalg.norm(acc.acc_fire)),
-            'boundary': float(np.linalg.norm(acc.acc_bound)),
+            'environmental': float(np.linalg.norm(acc_environmental)),  # 合并后的环境加速度
             'psychological': float(np.linalg.norm(acc.acc_psy)),
             'total': float(np.linalg.norm(acc.acc_total))
         }

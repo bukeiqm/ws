@@ -10,9 +10,9 @@ HERD_FACT_NORMAL = 0.1  # C_int if not leader
 
 # ================================行人类型参数=============================== #
 DESIRED_SPEED = {
-    "adult": 2.0,  # Desired speed of an adult (m/s)
-    "elder": 1.3,  # an elderly
-    "child": 1.3  # and an children
+    "adult": 1.3,  # Desired speed of an adult (m/s)
+    "elder": 0.8,  # an elderly
+    "child": 1.0  # and an children
 }
 
 SAFE_DISTANCE = {
@@ -42,17 +42,27 @@ INTERPERSONAL_FORCE_PARAMS = {
 # ================================环境参数=============================== #
 ENVIRONMENTAL_FORCE_PARAMS = {
     "danger": {"A": 5.0, "B": 0.8},  # Params uses when calc forces from dangers
-    "obstacle": {"A": 5.0, "B": 2.0}
+    "obstacle": {"A": 3.0, "B": 0.5}
 }
 
 DANGER_EFFECT_PARAMS = {
-    "default": {"lambda": 5.0, "stimuli": 1.0},  # Params for danger
-    "fire": {"lambda": 0.5, "stimuli": 50.0}  # Params for fire (will be overridden by FIRE_DANGER_*)
+    "default": {"lambda": 0.5, "stimuli": 0.5},  # Params for danger
+    "fire": {"lambda": 0.5, "stimuli": 1.0}  # Params for fire (will be overridden by FIRE_DANGER_*)
 }
 
 # ================================路径选择参数=============================== #
 HERD_BEHAVIOR_FACTOR = 0.5  # 从众行为因子（0-1，越高越从众）
-STIMULUS_THRESHOLD = 0.8  # 刺激阈值，超过此值会随机选择
+
+# 心理阈值（用于路径规划）：当恐慌值超过此阈值时，行人会随机选择路径
+# 不同年龄段的行人具有不同的心理承受能力
+STIMULUS_THRESHOLD = {
+    "adult": 0.8,   # 成人心理阈值（用于调试）
+    "elder": 0.6,   # 老人心理阈值（用于调试，老人更容易恐慌）
+    "child": 0.7    # 儿童心理阈值（用于调试）
+}
+# 向后兼容：保留全局阈值作为默认值
+STIMULUS_THRESHOLD_DEFAULT = 0.8  # 默认刺激阈值（向后兼容）
+
 DANGER_WEIGHT = 2.0  # 危险程度权重
 
 # ================================心理状态影响参数=============================== #
@@ -61,14 +71,14 @@ PANIC_PROBABILITY_STD = 0.3  # 正态分布概率因子的标准差
 
 # ================================火灾参数=============================== #
 # 火灾扩散参数
-FIRE_SPREAD_TIME_MIN = 2.0  # 火灾向相邻区域扩散的最小时间（秒）
-FIRE_SPREAD_TIME_MAX = 5.0  # 火灾向相邻区域扩散的最大时间（秒）
+FIRE_SPREAD_TIME_MIN = 5.0  # 火灾向相邻区域扩散的最小时间（秒）
+FIRE_SPREAD_TIME_MAX = 8.0  # 火灾向相邻区域扩散的最大时间（秒）
 FIRE_DURATION_MIN = 10.0  # 火灾持续的最小时间（秒）
-FIRE_DURATION_MAX = 20.0  # 火灾持续的最大时间（秒）
-FIRE_SPREAD_PROBABILITY = 0.6  # 火灾扩散到相邻区域的概率（0-1）
+FIRE_DURATION_MAX = 15.0  # 火灾持续的最大时间（秒）
+FIRE_SPREAD_PROBABILITY = 0.8  # 火灾扩散到相邻区域的概率（0-1）
 
 # 火灾危险参数
-FIRE_DANGER_LAMBDA = 8.0  # 火灾危险影响范围参数（lambda）
+FIRE_DANGER_LAMBDA = 5.0  # 火灾危险影响范围参数（lambda）
 FIRE_DANGER_STIMULI = 2.0  # 火灾基础刺激值（比普通危险源更高）
 FIRE_ENVIRONMENTAL_FORCE_A = 20.0  # 火灾环境力参数A（比普通危险源更强，产生较大推力）
 FIRE_ENVIRONMENTAL_FORCE_B = 0.8  # 火灾环境力参数B（较小的值使推力在更远距离仍然有效）

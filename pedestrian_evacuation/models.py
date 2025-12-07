@@ -48,12 +48,17 @@ class Area:
         if not choices or self.map_manager is None:
             return None
         
+        # 获取该行人的心理阈值
+        threshold = constants.STIMULUS_THRESHOLD.get(
+            self.agent_type, 
+            constants.STIMULUS_THRESHOLD_DEFAULT
+        )
         # 简单模式或恐慌时随机选择
-        if not self.use_smart_choice or self.panic > constants.STIMULUS_THRESHOLD:
+        if not self.use_smart_choice or self.panic > threshold:
             valid_choices = [aid for aid in choices if aid in self.map_manager.areas]
             if not valid_choices:
                 return None
-            if self.panic > constants.STIMULUS_THRESHOLD:
+            if self.panic > threshold:
                 return np.random.choice(valid_choices)
             # 简单模式：选择距离出口最近的节点
             min_dist = float('inf')

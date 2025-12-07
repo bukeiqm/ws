@@ -5,6 +5,15 @@ from pedestrian_evacuation import run_simulation
 if __name__ == "__main__":
     # ========== 基本仿真 ==========
     ani = run_simulation(use_smart_choice=True,
+    num_agents=20,
+    num_obstacles=5,
+    num_danger=2,
+    enable_fire=True,
+    fire_initial_count=2,
+    enable_ai=True,
+    ai_recommendation_weight=0.5,
+    mpc_horizon=5,
+    mpc_update_interval=1.0,
     monitor_agent_index=0)
     
     # ========== 示例：监视器系统 ==========
