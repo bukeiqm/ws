@@ -51,6 +51,10 @@ class AgentMonitor:
         self.current_acceleration: Optional[AccelerationRecord] = None
         self.current_path_weights: Optional[PathSelectionWeights] = None
         self.current_panic: float = 0.0
+        
+        # 重新绘制相关属性
+        self._frame_count: int = 0  # 当前帧计数
+        self._time_offset: float = 0.0  # 时间偏移量（用于重新绘制时重置时间）
     
     def record(
         self,

@@ -520,9 +520,18 @@ def run_simulation(use_smart_choice=None, num_agents=None, num_obstacles=None, n
     stats_text = ax.text(0.02, 0.98, '', transform=ax.transAxes, 
                          fontsize=10, verticalalignment='top',
                          bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.8))
-    scat1 = ax.scatter([p.pos[0] for p in agents if not p.evacuated],
-                       [p.pos[1] for p in agents if not p.evacuated],
-                       c='blue', marker='o', s=80, label='行人', zorder=5)
+    # 为不同类型的行人设置不同颜色
+    agent_type_colors = {
+        "adult": 'blue',    # 成人：蓝色
+        "elder": 'gray',    # 老人：灰色
+        "child": 'cyan'     # 儿童：青色
+    }
+    
+    # 按类型分组绘制行人
+    scat_adult = ax.scatter([], [], c='blue', marker='o', s=80, label='成人', zorder=5)
+    scat_elder = ax.scatter([], [], c='gray', marker='o', s=80, label='老人', zorder=5)
+    scat_child = ax.scatter([], [], c='cyan', marker='o', s=80, label='儿童', zorder=5)
+    scat_agents = {'adult': scat_adult, 'elder': scat_elder, 'child': scat_child}
     scat2 = ax.scatter([o.pos[0] for o in obstacles],
                        [o.pos[1] for o in obstacles],
                        c='red', marker='s', s=150, label='障碍物', zorder=4)
@@ -728,21 +737,41 @@ def run_simulation(use_smart_choice=None, num_agents=None, num_obstacles=None, n
             
             # 记录监视器数据（如果这是被监视的行人）
             if monitor is not None and agent is monitor.agent:
+                # 检查是否需要重新绘制（达到指定帧数后）
+                if constants.MONITOR_RESET_FRAMES > 0:
+                    # 初始化时间偏移（第一次记录时）
+                    if monitor._frame_count == 0 and len(monitor.time_history) == 0:
+                        monitor._time_offset = current_time
+                    
+                    monitor._frame_count += 1
+                    
+                    # 如果达到重置帧数，清除历史数据并重置时间基准
+                    if monitor._frame_count >= constants.MONITOR_RESET_FRAMES:
+                        monitor.clear_history()
+                        monitor._frame_count = 0
+                        # 重置时间基准，使时间从0开始
+                        monitor._time_offset = current_time
+                
                 if hasattr(agent, '_acc_record') and hasattr(agent, '_path_weights'):
                     from .monitor import PathSelectionWeights
                     path_weights = agent._path_weights if agent._path_weights else PathSelectionWeights()
-                    monitor.record(current_time, agent._acc_record, path_weights)
+                    # 如果设置了时间偏移，调整记录的时间（使图表从0开始）
+                    record_time = current_time
+                    if constants.MONITOR_RESET_FRAMES > 0:
+                        record_time = current_time - monitor._time_offset
+                    monitor.record(record_time, agent._acc_record, path_weights)
         
         # 更新已疏散人数
         evacuated_count[0] = sum(1 for a in agents if a.evacuated)
         remaining_count = len(agents) - evacuated_count[0]
         
-        # 更新散点图（只显示未疏散的行人）
-        new_poses = np.array([p.pos for p in agents if not p.evacuated])
-        if len(new_poses) > 0:
-            scat1.set_offsets(new_poses)
-        else:
-            scat1.set_offsets(np.empty((0, 2)))
+        # 更新散点图（只显示未疏散的行人，按类型分组）
+        for agent_type, scat in scat_agents.items():
+            type_poses = np.array([p.pos for p in agents if not p.evacuated and p.agent_type == agent_type])
+            if len(type_poses) > 0:
+                scat.set_offsets(type_poses)
+            else:
+                scat.set_offsets(np.empty((0, 2)))
         
         # 更新统计信息
         stats_text_str = f'时间: {current_time:.1f}s\n'
@@ -807,7 +836,7 @@ def run_simulation(use_smart_choice=None, num_agents=None, num_obstacles=None, n
             if monitor_fig is not None:
                 monitor_fig.canvas.draw_idle()
 
-        return_items = [scat1, stats_text]
+        return_items = [scat_adult, scat_elder, scat_child, stats_text]
         if scat4 is not None:
             return_items.append(scat4)
         return tuple(return_items)

@@ -117,7 +117,8 @@ class AgentData:
     target_pos: Optional[np.ndarray] = None
     path: List[int] = field(default_factory=list)
     path_index: int = 0
-    next_target_area_id: int = -1
+    next_target_area_id: int = -1  # 路径规划建议的下一个目标区域ID
+    committed_target_area_id: int = -1  # 已承诺的下一个目标区域ID（实际移动目标）
     use_smart_choice: bool = True
     
     # 心理状态

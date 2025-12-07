@@ -752,8 +752,10 @@ class PathPlanner:
         if not choices or self.map_manager is None:
             return None
         
-        # 验证选项的有效性
-        valid_choices = [aid for aid in choices if aid in self.map_manager.areas]
+        # 验证选项的有效性（检查区域是否存在且可通行）
+        valid_choices = [aid for aid in choices 
+                        if aid in self.map_manager.areas 
+                        and self.map_manager.is_area_passable(aid)]
         if not valid_choices:
             return None
         
@@ -820,6 +822,10 @@ class PathPlanner:
             if area_id not in self.map_manager.areas:
                 continue
             
+            # 确保区域可通行（双重检查，确保安全）
+            if not self.map_manager.is_area_passable(area_id):
+                continue
+            
             area = self.map_manager.areas[area_id]
             area_center = np.array(area.center)
             
@@ -854,9 +860,11 @@ class PathPlanner:
                 neighbor_choices = 0
                 total_neighbors = 0
                 for neighbor in neighbors:
-                    if neighbor.next_target_area_id != -1:
+                    # 使用committed_target_area_id来判断从众行为（更准确，反映实际移动目标）
+                    neighbor_target_id = neighbor.committed_target_area_id if neighbor.committed_target_area_id != -1 else neighbor.next_target_area_id
+                    if neighbor_target_id != -1:
                         total_neighbors += 1
-                        if neighbor.next_target_area_id == area_id:
+                        if neighbor_target_id == area_id:
                             neighbor_choices += 1
                 
                 if total_neighbors > 0:
@@ -974,6 +982,10 @@ class PathPlanner:
         if len(agent.path) == 0 or current_area_id not in agent.path:
             agent.path = self.find_path(current_area_id, agent.exit_node_id)
             agent.path_index = 0
+            # 路径重新规划时，如果committed_target_area_id不在新路径中，重置它
+            if agent.committed_target_area_id != -1:
+                if agent.committed_target_area_id not in agent.path and agent.committed_target_area_id != agent.exit_node_id:
+                    agent.committed_target_area_id = -1
         
         # 如果路径规划失败，直接朝向出口
         if len(agent.path) == 0:
@@ -998,17 +1010,28 @@ class PathPlanner:
             if agent.exit_node_id in self.map_manager.areas:
                 exit_area = self.map_manager.areas[agent.exit_node_id]
                 agent.next_target_area_id = agent.exit_node_id
-                if agent.exit_pos is not None:
-                    agent.target_pos = agent.exit_pos
-                else:
-                    agent.target_pos = np.array(exit_area.center)
+                # 只有当next_target_area_id与committed_target_area_id相同时，才更新承诺的ID
+                if agent.exit_node_id == agent.committed_target_area_id:
+                    if agent.exit_pos is not None:
+                        agent.target_pos = agent.exit_pos
+                    else:
+                        agent.target_pos = np.array(exit_area.center)
+                # 如果committed_target_area_id未设置（初始状态），则立即设置
+                elif agent.committed_target_area_id == -1:
+                    agent.committed_target_area_id = agent.exit_node_id
+                    if agent.exit_pos is not None:
+                        agent.target_pos = agent.exit_pos
+                    else:
+                        agent.target_pos = np.array(exit_area.center)
         else:
             # 目标指向路径中的下一个区域
             if agent.use_smart_choice and current_area.is_node():
                 adjacent_areas = self.map_manager.get_adjacent_areas(current_area_id)
                 if len(adjacent_areas) > 0:
+                    # 只选择可通行的区域，且该区域在路径中或是出口
                     choices = [area.id for area in adjacent_areas 
-                              if area.id in agent.path or area.id == agent.exit_node_id]
+                              if (self.map_manager.is_area_passable(area.id) and
+                                  (area.id in agent.path or area.id == agent.exit_node_id))]
                     if len(choices) > 0:
                         if agent.exit_pos is not None:
                             exit_pos = agent.exit_pos
@@ -1023,20 +1046,53 @@ class PathPlanner:
                             mpc_planner, all_agents, fire_manager, current_time
                         )
                         if chosen_id is not None:
-                            try:
-                                chosen_idx = agent.path.index(chosen_id)
-                                if chosen_idx > agent.path_index:
-                                    agent.path_index = chosen_idx - 1
-                            except ValueError:
-                                pass
+                            # 只有当选择的ID与已承诺的ID相同时，才更新承诺的ID
+                            if chosen_id == agent.committed_target_area_id:
+                                # 更新next_target_area_id用于路径规划
+                                agent.next_target_area_id = chosen_id
+                                try:
+                                    chosen_idx = agent.path.index(chosen_id)
+                                    if chosen_idx > agent.path_index:
+                                        agent.path_index = chosen_idx - 1
+                                except ValueError:
+                                    pass
+                            else:
+                                # 选择的ID与承诺的ID不同，只更新next_target_area_id（用于规划），不更新承诺的ID
+                                agent.next_target_area_id = chosen_id
             
+            # 动态更新目标点为路径中下一个节点的中心点
             next_area_id = (agent.path[agent.path_index + 1] 
                           if agent.path_index + 1 < len(agent.path) 
                           else agent.exit_node_id)
             if next_area_id in self.map_manager.areas:
                 next_area = self.map_manager.areas[next_area_id]
                 agent.next_target_area_id = next_area_id
-                agent.target_pos = np.array(next_area.center)
+                # 只有当next_target_area_id与committed_target_area_id相同时，才更新承诺的ID
+                if next_area_id == agent.committed_target_area_id:
+                    # 目标点始终设置为下一个节点的中心点
+                    agent.target_pos = np.array(next_area.center)
+                # 如果committed_target_area_id未设置（初始状态），则立即设置
+                elif agent.committed_target_area_id == -1:
+                    agent.committed_target_area_id = next_area_id
+                    agent.target_pos = np.array(next_area.center)
+            else:
+                # 如果下一个区域不存在，尝试使用出口
+                if agent.exit_node_id in self.map_manager.areas:
+                    exit_area = self.map_manager.areas[agent.exit_node_id]
+                    agent.next_target_area_id = agent.exit_node_id
+                    # 只有当next_target_area_id与committed_target_area_id相同时，才更新承诺的ID
+                    if agent.exit_node_id == agent.committed_target_area_id:
+                        if agent.exit_pos is not None:
+                            agent.target_pos = agent.exit_pos
+                        else:
+                            agent.target_pos = np.array(exit_area.center)
+                    # 如果committed_target_area_id未设置（初始状态），则立即设置
+                    elif agent.committed_target_area_id == -1:
+                        agent.committed_target_area_id = agent.exit_node_id
+                        if agent.exit_pos is not None:
+                            agent.target_pos = agent.exit_pos
+                        else:
+                            agent.target_pos = np.array(exit_area.center)
 
 
 class AgentManager:
@@ -1088,8 +1144,141 @@ class AgentManager:
             mpc_planner, all_agents, fire_manager, current_time
         )
         
-        # 确定目标点
-        target = agent.target_pos if agent.target_pos is not None else agent.pos
+        # 获取当前位置所在区域（用于智能目标点选择）
+        current_area = None
+        if self.map_manager is not None:
+            current_area = self.map_manager.get_area_containing_point(agent.pos)
+        
+        # 动态更新目标点
+        if len(agent.path) > 0 and agent.path_index < len(agent.path):
+            # 检查是否使用智能逻辑选择目标点
+            if (constants.SMART_TARGET_SELECTION and agent.use_smart_choice and 
+                current_area is not None and current_area.is_node()):
+                # 使用智能逻辑选择目标点（与路径选择逻辑相同）
+                adjacent_areas = self.map_manager.get_adjacent_areas(current_area.id)
+                if len(adjacent_areas) > 0:
+                    # 获取所有可选的相邻区域（包括路径中的和出口），只选择可通行的区域
+                    choices = [area.id for area in adjacent_areas 
+                              if (self.map_manager.is_area_passable(area.id) and
+                                  (area.id in agent.path or area.id == agent.exit_node_id))]
+                    if len(choices) > 0:
+                        if agent.exit_pos is not None:
+                            exit_pos = agent.exit_pos
+                        elif agent.exit_node_id in self.map_manager.areas:
+                            exit_area = self.map_manager.areas[agent.exit_node_id]
+                            exit_pos = np.array(exit_area.center)
+                        else:
+                            exit_pos = np.array([0, 0])
+                        
+                        # 使用智能选择逻辑选择目标点
+                        chosen_id = self.path_planner.choose_path(
+                            agent, exit_pos, choices, neighbors, dangers, obstacles,
+                            mpc_planner, all_agents, fire_manager, current_time
+                        )
+                        if chosen_id is not None and chosen_id in self.map_manager.areas:
+                            chosen_area = self.map_manager.areas[chosen_id]
+                            agent.next_target_area_id = chosen_id
+                            # 只有当选择的ID与已承诺的ID相同时，才更新承诺的ID和目标点
+                            if chosen_id == agent.committed_target_area_id:
+                                agent.target_pos = np.array(chosen_area.center)
+                            # 如果committed_target_area_id未设置（初始状态），则立即设置
+                            elif agent.committed_target_area_id == -1:
+                                agent.committed_target_area_id = chosen_id
+                                agent.target_pos = np.array(chosen_area.center)
+                        else:
+                            # 如果智能选择失败，回退到路径中的下一个节点
+                            next_idx = agent.path_index + 1
+                            if next_idx < len(agent.path):
+                                next_area_id = agent.path[next_idx]
+                                if next_area_id in self.map_manager.areas:
+                                    next_area = self.map_manager.areas[next_area_id]
+                                    agent.next_target_area_id = next_area_id
+                                    # 只有当next_target_area_id与committed_target_area_id相同时，才更新承诺的ID
+                                    if next_area_id == agent.committed_target_area_id:
+                                        agent.target_pos = np.array(next_area.center)
+                                    # 如果committed_target_area_id未设置（初始状态），则立即设置
+                                    elif agent.committed_target_area_id == -1:
+                                        agent.committed_target_area_id = next_area_id
+                                        agent.target_pos = np.array(next_area.center)
+                            elif agent.exit_node_id in self.map_manager.areas:
+                                agent.next_target_area_id = agent.exit_node_id
+                                # 只有当next_target_area_id与committed_target_area_id相同时，才更新承诺的ID
+                                if agent.exit_node_id == agent.committed_target_area_id:
+                                    if agent.exit_pos is not None:
+                                        agent.target_pos = agent.exit_pos
+                                    else:
+                                        exit_area = self.map_manager.areas[agent.exit_node_id]
+                                        agent.target_pos = np.array(exit_area.center)
+                                # 如果committed_target_area_id未设置（初始状态），则立即设置
+                                elif agent.committed_target_area_id == -1:
+                                    agent.committed_target_area_id = agent.exit_node_id
+                                    if agent.exit_pos is not None:
+                                        agent.target_pos = agent.exit_pos
+                                    else:
+                                        exit_area = self.map_manager.areas[agent.exit_node_id]
+                                        agent.target_pos = np.array(exit_area.center)
+                    else:
+                        # 没有可选区域，使用路径中的下一个节点
+                        next_idx = agent.path_index + 1
+                        if next_idx < len(agent.path):
+                            next_area_id = agent.path[next_idx]
+                            if next_area_id in self.map_manager.areas:
+                                next_area = self.map_manager.areas[next_area_id]
+                                agent.next_target_area_id = next_area_id
+                                # 只有当next_target_area_id与committed_target_area_id相同时，才更新承诺的ID
+                                if next_area_id == agent.committed_target_area_id:
+                                    agent.target_pos = np.array(next_area.center)
+                                # 如果committed_target_area_id未设置（初始状态），则立即设置
+                                elif agent.committed_target_area_id == -1:
+                                    agent.committed_target_area_id = next_area_id
+                                    agent.target_pos = np.array(next_area.center)
+            else:
+                # 默认行为：目标点设置为路径中下一个节点的中心点
+                next_idx = agent.path_index + 1
+                if next_idx < len(agent.path):
+                    next_area_id = agent.path[next_idx]
+                    if next_area_id in self.map_manager.areas:
+                        next_area = self.map_manager.areas[next_area_id]
+                        agent.next_target_area_id = next_area_id
+                        # 只有当next_target_area_id与committed_target_area_id相同时，才更新承诺的ID
+                        if next_area_id == agent.committed_target_area_id:
+                            agent.target_pos = np.array(next_area.center)
+                        # 如果committed_target_area_id未设置（初始状态），则立即设置
+                        elif agent.committed_target_area_id == -1:
+                            agent.committed_target_area_id = next_area_id
+                            agent.target_pos = np.array(next_area.center)
+                elif agent.exit_node_id in self.map_manager.areas:
+                    # 如果已经到达路径末尾，目标指向出口
+                    agent.next_target_area_id = agent.exit_node_id
+                    # 只有当next_target_area_id与committed_target_area_id相同时，才更新承诺的ID
+                    if agent.exit_node_id == agent.committed_target_area_id:
+                        if agent.exit_pos is not None:
+                            agent.target_pos = agent.exit_pos
+                        else:
+                            exit_area = self.map_manager.areas[agent.exit_node_id]
+                            agent.target_pos = np.array(exit_area.center)
+                    # 如果committed_target_area_id未设置（初始状态），则立即设置
+                    elif agent.committed_target_area_id == -1:
+                        agent.committed_target_area_id = agent.exit_node_id
+                        if agent.exit_pos is not None:
+                            agent.target_pos = agent.exit_pos
+                        else:
+                            exit_area = self.map_manager.areas[agent.exit_node_id]
+                            agent.target_pos = np.array(exit_area.center)
+        
+        # 确定目标点（用于计算加速度）
+        # 使用committed_target_area_id来确定目标点，而不是next_target_area_id
+        if agent.committed_target_area_id != -1 and self.map_manager is not None:
+            if agent.committed_target_area_id in self.map_manager.areas:
+                committed_area = self.map_manager.areas[agent.committed_target_area_id]
+                if agent.committed_target_area_id == agent.exit_node_id and agent.exit_pos is not None:
+                    target = agent.exit_pos
+                else:
+                    target = np.array(committed_area.center)
+            else:
+                target = agent.target_pos if agent.target_pos is not None else agent.pos
+        else:
+            target = agent.target_pos if agent.target_pos is not None else agent.pos
         
         # 更新panic
         self.update_panic(agent, neighbors, dangers)
@@ -1132,31 +1321,56 @@ class AgentManager:
                 agent.evacuated = True
                 return
         
-        # 检查是否到达路径中的中间目标
-        if agent.target_pos is not None and isinstance(agent.target_pos, np.ndarray):
-            dist_to_target = np.linalg.norm(agent.pos - agent.target_pos)
-            target_reached = False
-            if agent.next_target_area_id != -1 and self.map_manager is not None:
-                if agent.next_target_area_id in self.map_manager.areas:
-                    target_area = self.map_manager.areas[agent.next_target_area_id]
-                    if self._point_in_area(agent.pos, target_area):
-                        target_reached = True
-            
-            if agent.next_target_area_id == agent.exit_node_id:
-                if agent.exit_pos is not None:
-                    agent.target_pos = agent.exit_pos
-            elif target_reached or dist_to_target < 0.3:
-                if len(agent.path) > 0 and agent.path_index < len(agent.path) - 1:
-                    agent.path_index += 1
-                    if agent.path_index < len(agent.path) and self.map_manager is not None:
-                        next_area_id = agent.path[agent.path_index]
-                        if next_area_id in self.map_manager.areas:
-                            next_area = self.map_manager.areas[next_area_id]
-                            agent.next_target_area_id = next_area_id
-                            if next_area_id == agent.exit_node_id and agent.exit_pos is not None:
+        # 检查是否到达路径中的中间目标（使用committed_target_area_id）
+        if agent.committed_target_area_id != -1 and self.map_manager is not None:
+            if agent.committed_target_area_id in self.map_manager.areas:
+                committed_area = self.map_manager.areas[agent.committed_target_area_id]
+                # 检查是否到达已承诺的目标区域
+                if self._point_in_area(agent.pos, committed_area):
+                    # 到达目标区域，更新committed_target_area_id为下一个目标
+                    # 使用next_target_area_id作为新的承诺目标（如果已设置）
+                    if agent.next_target_area_id != -1 and agent.next_target_area_id != agent.committed_target_area_id:
+                        # 更新承诺的目标ID
+                        agent.committed_target_area_id = agent.next_target_area_id
+                        if agent.next_target_area_id in self.map_manager.areas:
+                            next_area = self.map_manager.areas[agent.next_target_area_id]
+                            if agent.next_target_area_id == agent.exit_node_id and agent.exit_pos is not None:
                                 agent.target_pos = agent.exit_pos
                             else:
                                 agent.target_pos = np.array(next_area.center)
+                        # 更新路径索引
+                        if len(agent.path) > 0 and agent.path_index < len(agent.path) - 1:
+                            try:
+                                new_index = agent.path.index(agent.next_target_area_id)
+                                if new_index > agent.path_index:
+                                    agent.path_index = new_index
+                            except ValueError:
+                                pass
+                    elif agent.committed_target_area_id == agent.exit_node_id:
+                        # 已到达出口区域，但还需要到达exit_pos
+                        if agent.exit_pos is not None:
+                            agent.target_pos = agent.exit_pos
+                else:
+                    # 未到达目标区域，检查距离（作为备用判断）
+                    if agent.target_pos is not None and isinstance(agent.target_pos, np.ndarray):
+                        dist_to_target = np.linalg.norm(agent.pos - agent.target_pos)
+                        if dist_to_target < 0.3:
+                            # 距离很近，认为已到达
+                            if agent.next_target_area_id != -1 and agent.next_target_area_id != agent.committed_target_area_id:
+                                agent.committed_target_area_id = agent.next_target_area_id
+                                if agent.next_target_area_id in self.map_manager.areas:
+                                    next_area = self.map_manager.areas[agent.next_target_area_id]
+                                    if agent.next_target_area_id == agent.exit_node_id and agent.exit_pos is not None:
+                                        agent.target_pos = agent.exit_pos
+                                    else:
+                                        agent.target_pos = np.array(next_area.center)
+                                if len(agent.path) > 0 and agent.path_index < len(agent.path) - 1:
+                                    try:
+                                        new_index = agent.path.index(agent.next_target_area_id)
+                                        if new_index > agent.path_index:
+                                            agent.path_index = new_index
+                                    except ValueError:
+                                        pass
     
     @staticmethod
     def _point_in_area(pos: np.ndarray, area: AreaData) -> bool:
